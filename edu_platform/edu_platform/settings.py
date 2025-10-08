@@ -6,6 +6,7 @@ from pathlib import Path
 from decouple import config
 from celery.schedules import crontab
 import os
+import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -75,17 +76,7 @@ WSGI_APPLICATION = 'edu_platform.wsgi.application'
 
 # Database - RDS Configuration
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config("NAME"),
-        'USER': config("USER"),
-        'PASSWORD': config("PASSWORD"),
-        'HOST': config("HOST"),
-        'PORT': config("PORT", default="5432"),
-        'OPTIONS': {
-            'connect_timeout': 30,
-        },
-    }
+    'default': dj_database_url.parse(config('DATABASE_URL'))
 }
 
 # Password validation
