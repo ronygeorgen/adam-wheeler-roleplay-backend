@@ -70,6 +70,11 @@ class GHLUserViewSet(viewsets.ViewSet):
         # Return updated user data
         serializer = GHLUserSerializer(user)
         return Response(serializer.data)
+    
+    def destroy(self, request, pk=None):
+        user = get_object_or_404(GHLUser, user_id=pk)
+        user.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 class UserAccessViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
@@ -99,7 +104,8 @@ class UserAccessViewSet(viewsets.ViewSet):
             return Response({
                 'user': {
                     'name': user.name,
-                    'email': user.email
+                    'email': user.email,
+                    'location_id': user.location_ghl_id  # CHANGE THIS LINE
                 },
                 'categories': categories_data
             })

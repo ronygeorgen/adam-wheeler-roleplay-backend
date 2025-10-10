@@ -11,6 +11,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from .serializers import GHLUserSerializer
 from roleplay.models import UserCategoryAssignment
+from .helpers import assign_all_categories_to_users
 
 GHL_CLIENT_ID = config("GHL_CLIENT_ID")
 GHL_CLIENT_SECRET = config("GHL_CLIENT_SECRET")
@@ -92,18 +93,22 @@ class GHLTokensView(APIView):
                 }
             )
 
-            # FIX: Use direct function call instead of Celery task
+            # Sync users
             from .helpers import sync_ghl_users
             users_synced = sync_ghl_users(
                 response_data.get("locationId"),
                 response_data.get("access_token")
             )
 
+            # AUTO-ASSIGN ALL CATEGORIES TO ALL USERS
+            # assignment_result = assign_all_categories_to_users(response_data.get("locationId"))
+
             return Response({
                 "message": "Authentication successful",
                 "location_id": response_data.get("locationId"),
                 "location_name": location_name,
                 "users_synced": users_synced,
+                "categories_auto_assigned": True,  # Add this flag
                 "token_stored": True
             })
             
@@ -217,3 +222,37 @@ class GetUsersView(APIView):
         
         serializer = GHLUserSerializer(users, many=True)
         return Response(serializer.data)
+
+class AssignCategoriesToAllUsersView(APIView):
+    """API to manually assign all categories to all users in a location"""
+    
+    def post(self, request):
+        location_id = request.data.get('location_id')
+        
+        if not location_id:
+            return Response(
+                {"error": "location_id is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            result = assign_all_categories_to_users(location_id)
+            
+            if result['success']:
+                return Response({
+                    "message": "Categories assigned successfully",
+                    "users_count": result['users_count'],
+                    "categories_count": result['categories_count'],
+                    "assignments_created": result['assignments_created']
+                })
+            else:
+                return Response(
+                    {"error": result['error']}, 
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

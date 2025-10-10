@@ -20,6 +20,7 @@ class GHLAuthCredentials(models.Model):
 class GHLUser(models.Model):
     user_id = models.CharField(max_length=255, unique=True)
     location = models.ForeignKey(GHLAuthCredentials, on_delete=models.CASCADE, related_name='users')
+    location_ghl_id = models.CharField(max_length=255, blank=True)  # ADD THIS FIELD
     name = models.CharField(max_length=255)
     first_name = models.CharField(max_length=100, blank=True)
     last_name = models.CharField(max_length=100, blank=True)
@@ -35,6 +36,32 @@ class GHLUser(models.Model):
     
     def __str__(self):
         return f"{self.name} - {self.email}"
+    
+    def __str__(self):
+        return f"{self.name} - {self.email}"
+    
+
+class GHLLocation(models.Model):
+    location_id = models.CharField(max_length=255, unique=True)
+    company_id = models.CharField(max_length=255)
+    name = models.CharField(max_length=255)
+    address = models.TextField(blank=True)
+    city = models.CharField(max_length=100, blank=True)
+    state = models.CharField(max_length=100, blank=True)
+    country = models.CharField(max_length=100, blank=True)
+    timezone = models.CharField(max_length=100, blank=True)
+    phone = models.CharField(max_length=20, blank=True)
+    website = models.URLField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'ghl_locations'
+    
+    def __str__(self):
+        return f"{self.name} - {self.location_id}"
+
 
 class WebhookLog(models.Model):
     received_at = models.DateTimeField(auto_now_add=True)
