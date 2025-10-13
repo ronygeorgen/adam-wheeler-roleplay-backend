@@ -56,6 +56,10 @@ MIDDLEWARE = [
 ]
 
 X_FRAME_OPTIONS = 'ALLOWALL'
+CSRF_COOKIE_SAMESITE = 'None'
+CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SAMESITE = 'None'
+SESSION_COOKIE_SECURE = True
 
 
 ROOT_URLCONF = 'edu_platform.urls'
@@ -112,17 +116,31 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Configuration
-CORS_ALLOWED_ORIGINS = config(
-    "CORS_ALLOWED_ORIGINS",
-    default="http://localhost:3000,http://localhost:5173",
-    cast=lambda v: [s.strip() for s in v.split(',')]
-)
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173", 
+    "http://52.8.241.44:5173",
+    "https://app.performai.group",
+    "https://app.performglobe.com",
+    "https://app.gohighlevel.com",
+    "https://*.gohighlevel.com",
+    "https://*.highlevel.com",
+    "https://*.leadconnectorhq.com",
+]
 
-CSRF_TRUSTED_ORIGINS = config(
-    "CSRF_TRUSTED_ORIGINS", 
-    default="http://localhost:3000,http://localhost:5173",
-    cast=lambda v: [s.strip() for s in v.split(',')]
-)
+CORS_ALLOW_ALL_ORIGINS = True
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://52.8.241.44:5173", 
+    "https://app.performai.group",
+    "https://app.performglobe.com",
+    "https://app.gohighlevel.com",
+    "https://*.gohighlevel.com",
+    "https://*.highlevel.com",
+    "https://*.leadconnectorhq.com",
+]
 
 CORS_ALLOW_HEADERS = [
     'accept',
