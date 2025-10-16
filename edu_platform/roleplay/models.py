@@ -30,3 +30,38 @@ class UserCategoryAssignment(models.Model):
 
     def __str__(self):
         return f"{self.user.name} - {self.category.name}"
+    
+
+class Feedback(models.Model):
+    user = models.ForeignKey(GHLUser, on_delete=models.CASCADE, related_name='feedbacks')
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    email = models.EmailField()
+    score = models.IntegerField()
+    strengths = models.TextField(help_text="What did you do well?")
+    improvements = models.TextField(help_text="What could you improve?")
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'feedback_submissions'
+        ordering = ['-submitted_at']
+    
+    def __str__(self):
+        return f"Feedback from {self.first_name} {self.last_name} - Score: {self.score}"
+    
+
+class RoleplayScore(models.Model):
+    """Model to store roleplay scores separately if needed"""
+    user = models.ForeignKey(GHLUser, on_delete=models.CASCADE, related_name='scores')
+    model = models.ForeignKey(Model, on_delete=models.CASCADE, related_name='scores')
+    score = models.IntegerField()
+    raw_score = models.CharField(max_length=50, blank=True, null=True)  # Store the original score string like "85%"
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'roleplay_scores'
+        ordering = ['-submitted_at']
+        unique_together = ['user', 'model']  # One score per user per model
+    
+    def __str__(self):
+        return f"{self.user.name} - {self.model.name}: {self.score}%"

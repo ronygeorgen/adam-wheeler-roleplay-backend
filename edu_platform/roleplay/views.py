@@ -1,12 +1,15 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework import serializers
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from .models import Category, Model, UserCategoryAssignment
+from django.db.models import Avg, Count, Q
+from .models import Category, Model, UserCategoryAssignment, Feedback, RoleplayScore
 from account.models import GHLUser
 from .serializers import (
     CategorySerializer, ModelSerializer, 
-    GHLUserSerializer  # Removed UserCategoryAssignmentSerializer
+    GHLUserSerializer, FeedbackSerializer,
+    RoleplayScoreSerializer, ScoreSubmissionSerializer
 )
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -115,3 +118,242 @@ class UserAccessViewSet(viewsets.ViewSet):
                 {"error": "User not found or inactive"}, 
                 status=status.HTTP_404_NOT_FOUND
             )
+
+class FeedbackViewSet(viewsets.ModelViewSet):
+    queryset = Feedback.objects.all()
+    serializer_class = FeedbackSerializer
+    
+    def get_queryset(self):
+        """
+        Return feedbacks based on query parameters
+        """
+        queryset = Feedback.objects.all()
+        
+        # Filter by location
+        location_id = self.request.query_params.get('location_id')
+        if location_id:
+            queryset = queryset.filter(user__location_ghl_id=location_id)
+        
+        # Filter by user email
+        user_email = self.request.query_params.get('user_email')
+        if user_email:
+            queryset = queryset.filter(email=user_email)
+        
+        # Filter by date range
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        if start_date:
+            queryset = queryset.filter(submitted_at__date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(submitted_at__date__lte=end_date)
+            
+        return queryset.select_related('user')
+    
+    @action(detail=False, methods=['get'])
+    def user_feedback(self, request):
+        """
+        Get feedback for a specific user by email
+        """
+        email = request.query_params.get('email')
+        if not email:
+            return Response(
+                {"error": "Email parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        feedbacks = Feedback.objects.filter(email=email).select_related('user').order_by('-submitted_at')
+        serializer = self.get_serializer(feedbacks, many=True)
+        
+        return Response({
+            'email': email,
+            'feedbacks_count': feedbacks.count(),
+            'feedbacks': serializer.data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def location_feedback(self, request):
+        """
+        Get all feedback for a specific location
+        """
+        location_id = request.query_params.get('location_id')
+        if not location_id:
+            return Response(
+                {"error": "location_id parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        feedbacks = Feedback.objects.filter(
+            user__location_ghl_id=location_id
+        ).select_related('user').order_by('-submitted_at')
+        
+        serializer = self.get_serializer(feedbacks, many=True)
+        
+        # Calculate average score for the location
+        avg_score = feedbacks.aggregate(avg_score=Avg('score'))['avg_score'] or 0
+        
+        return Response({
+            'location_id': location_id,
+            'feedbacks_count': feedbacks.count(),
+            'average_score': round(avg_score, 2),
+            'feedbacks': serializer.data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """
+        Get feedback statistics
+        """
+        location_id = request.query_params.get('location_id')
+        
+        queryset = Feedback.objects.all()
+        if location_id:
+            queryset = queryset.filter(user__location_ghl_id=location_id)
+        
+        stats = queryset.aggregate(
+            total_feedbacks=Count('id'),
+            average_score=Avg('score'),
+            min_score=Count('score', filter=Q(score__lt=70)),
+            max_score=Count('score', filter=Q(score__gte=90))
+        )
+        
+        return Response(stats)
+
+class RoleplayScoreViewSet(viewsets.ModelViewSet):
+    queryset = RoleplayScore.objects.all()
+    serializer_class = RoleplayScoreSerializer
+    
+    def get_queryset(self):
+        queryset = RoleplayScore.objects.all()
+        
+        # Filter by location
+        location_id = self.request.query_params.get('location_id')
+        if location_id:
+            queryset = queryset.filter(user__location_ghl_id=location_id)
+        
+        # Filter by user email
+        user_email = self.request.query_params.get('user_email')
+        if user_email:
+            queryset = queryset.filter(user__email=user_email)
+        
+        # Filter by model
+        model_id = self.request.query_params.get('model_id')
+        if model_id:
+            queryset = queryset.filter(model_id=model_id)
+            
+        return queryset.select_related('user', 'model', 'model__category')
+    
+    @action(detail=False, methods=['post'])
+    def submit_score(self, request):
+        """
+        Submit a roleplay score from frontend
+        """
+        serializer = ScoreSubmissionSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email']
+            model_id = serializer.validated_data['model_id']
+            score = serializer.validated_data['score']
+            raw_score = serializer.validated_data.get('raw_score', '')
+            
+            try:
+                user = GHLUser.objects.get(email=email, status='active')
+                model = Model.objects.get(id=model_id)
+                
+                # Create or update score
+                roleplay_score, created = RoleplayScore.objects.update_or_create(
+                    user=user,
+                    model=model,
+                    defaults={
+                        'score': score,
+                        'raw_score': raw_score
+                    }
+                )
+                
+                # Also create a feedback entry
+                feedback = Feedback.objects.create(
+                    user=user,
+                    first_name=serializer.validated_data.get('first_name', user.first_name),
+                    last_name=serializer.validated_data.get('last_name', user.last_name),
+                    email=email,
+                    score=score,
+                    strengths="Auto-recorded from roleplay completion",
+                    improvements="Auto-recorded from roleplay completion"
+                )
+                
+                return Response({
+                    'message': 'Score submitted successfully',
+                    'score_id': roleplay_score.id,
+                    'feedback_id': feedback.id,
+                    'created': created
+                }, status=status.HTTP_201_CREATED)
+                
+            except GHLUser.DoesNotExist:
+                return Response(
+                    {"error": "User not found"}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            except Model.DoesNotExist:
+                return Response(
+                    {"error": "Model not found"}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['get'])
+    def user_scores(self, request):
+        """
+        Get all scores for a specific user
+        """
+        email = request.query_params.get('email')
+        if not email:
+            return Response(
+                {"error": "Email parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        scores = RoleplayScore.objects.filter(
+            user__email=email
+        ).select_related('user', 'model', 'model__category').order_by('-submitted_at')
+        
+        serializer = self.get_serializer(scores, many=True)
+        
+        # Calculate user statistics
+        user_stats = scores.aggregate(
+            total_scores=Count('id'),
+            average_score=Avg('score'),
+            highest_score=Count('score', filter=Q(score__gte=90)),
+            lowest_score=Count('score', filter=Q(score__lt=70))
+        )
+        
+        return Response({
+            'email': email,
+            'stats': user_stats,
+            'scores': serializer.data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def leaderboard(self, request):
+        """
+        Get leaderboard for a location
+        """
+        location_id = request.query_params.get('location_id')
+        if not location_id:
+            return Response(
+                {"error": "location_id parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get top users by average score
+        leaderboard = RoleplayScore.objects.filter(
+            user__location_ghl_id=location_id
+        ).values(
+            'user__user_id', 'user__name', 'user__email'
+        ).annotate(
+            average_score=Avg('score'),
+            tests_completed=Count('id')
+        ).order_by('-average_score')[:10]  # Top 10
+        
+        return Response({
+            'location_id': location_id,
+            'leaderboard': list(leaderboard)
+        })
