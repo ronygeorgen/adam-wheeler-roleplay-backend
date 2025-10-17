@@ -37,6 +37,8 @@ class Feedback(models.Model):
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     email = models.EmailField()
+    # Link feedback to the specific roleplay model attempted; category is derivable via model.category
+    model = models.ForeignKey('Model', on_delete=models.SET_NULL, null=True, blank=True, related_name='feedbacks')
     score = models.IntegerField()
     strengths = models.TextField(help_text="What did you do well?")
     improvements = models.TextField(help_text="What could you improve?")

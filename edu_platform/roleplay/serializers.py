@@ -36,11 +36,15 @@ class FeedbackSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.name', read_only=True)
     user_email = serializers.CharField(source='user.email', read_only=True)
     location_id = serializers.CharField(source='user.location_ghl_id', read_only=True)
+    model_name = serializers.CharField(source='model.name', read_only=True)
+    category_id = serializers.IntegerField(source='model.category.id', read_only=True)
+    category_name = serializers.CharField(source='model.category.name', read_only=True)
     
     class Meta:
         model = Feedback
         fields = [
             'id', 'user', 'user_name', 'user_email', 'location_id',
+            'model', 'model_name', 'category_id', 'category_name',
             'first_name', 'last_name', 'email', 'score', 'strengths', 
             'improvements', 'submitted_at'
         ]
