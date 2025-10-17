@@ -34,8 +34,8 @@ class UserCategoryAssignment(models.Model):
 
 class Feedback(models.Model):
     user = models.ForeignKey(GHLUser, on_delete=models.CASCADE, related_name='feedbacks')
-    first_name = models.CharField(max_length=100)
-    last_name = models.CharField(max_length=100)
+    first_name = models.CharField(max_length=100, blank=True, null=True)
+    last_name = models.CharField(max_length=100, blank=True, null=True)
     email = models.EmailField()
     # Link feedback to the specific roleplay model attempted; category is derivable via model.category
     model = models.ForeignKey('Model', on_delete=models.SET_NULL, null=True, blank=True, related_name='feedbacks')
@@ -49,7 +49,7 @@ class Feedback(models.Model):
         ordering = ['-submitted_at']
     
     def __str__(self):
-        return f"Feedback from {self.first_name} {self.last_name} - Score: {self.score}"
+        return f"Feedback from {self.first_name or ''} {self.last_name or ''} - Score: {self.score}"
     
 
 class RoleplayScore(models.Model):

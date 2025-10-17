@@ -49,6 +49,10 @@ class FeedbackSerializer(serializers.ModelSerializer):
             'improvements', 'submitted_at'
         ]
         read_only_fields = ['user', 'submitted_at']
+        extra_kwargs = {
+            'first_name': {'required': False, 'allow_blank': True, 'allow_null': True},
+            'last_name': {'required': False, 'allow_blank': True, 'allow_null': True},
+        }
     
     def validate_email(self, value):
         """
