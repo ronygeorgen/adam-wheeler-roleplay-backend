@@ -462,7 +462,6 @@ class UserPerformanceViewSet(viewsets.ViewSet):
                     'category_id': recent_score.model.category.id,
                     'category_name': recent_score.model.category.name,
                     'score': recent_score.score,
-                    'raw_score': recent_score.raw_score,
                     'timestamp': recent_score.submitted_at,
                 }
 
