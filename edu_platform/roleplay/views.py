@@ -259,17 +259,7 @@ class RoleplayScoreViewSet(viewsets.ModelViewSet):
                 user = GHLUser.objects.get(email=email, status='active')
                 model = Model.objects.get(id=model_id)
                 
-                # Create or update score
-                roleplay_score, created = RoleplayScore.objects.update_or_create(
-                    user=user,
-                    model=model,
-                    defaults={
-                        'score': score,
-                        'raw_score': raw_score
-                    }
-                )
-                
-                # Also create a feedback entry
+                # Create a feedback entry (now the source of truth for scores)
                 feedback = Feedback.objects.create(
                     user=user,
                     first_name=serializer.validated_data.get('first_name', user.first_name),
@@ -283,9 +273,8 @@ class RoleplayScoreViewSet(viewsets.ModelViewSet):
                 
                 return Response({
                     'message': 'Score submitted successfully',
-                    'score_id': roleplay_score.id,
                     'feedback_id': feedback.id,
-                    'created': created
+                    'created': True
                 }, status=status.HTTP_201_CREATED)
                 
             except GHLUser.DoesNotExist:
@@ -380,41 +369,40 @@ class UserPerformanceViewSet(viewsets.ViewSet):
         try:
             user = GHLUser.objects.get(email=email, status='active')
 
-            # All scores for this user
-            scores_qs = RoleplayScore.objects.filter(user=user).select_related('model', 'model__category')
-            feedbacks_qs = Feedback.objects.filter(user=user)
+            # All feedback entries for this user (with model info for roleplay linkage)
+            feedbacks_qs = Feedback.objects.filter(user=user).select_related('model', 'model__category')
 
             # Overall stats
             overall_stats = {
                 'total_feedbacks': feedbacks_qs.count(),
-                'total_scores': scores_qs.count(),
-                'average_score': scores_qs.aggregate(Avg('score'))['score__avg'] or 0,
-                'highest_score': scores_qs.aggregate(Max('score'))['score__max'] or 0,
-                'lowest_score': scores_qs.aggregate(Min('score'))['score__min'] or 0,
+                'total_scores': feedbacks_qs.count(),
+                'average_score': feedbacks_qs.aggregate(Avg('score'))['score__avg'] or 0,
+                'highest_score': feedbacks_qs.aggregate(Max('score'))['score__max'] or 0,
+                'lowest_score': feedbacks_qs.aggregate(Min('score'))['score__min'] or 0,
             }
 
             # Categories: union of assigned categories and categories the user has scored in
             assigned_category_ids = UserCategoryAssignment.objects.filter(user=user).values_list('category_id', flat=True)
-            categories_from_scores = Category.objects.filter(models__scores__user=user).values_list('id', flat=True)
+            categories_from_scores = Category.objects.filter(models__feedbacks__user=user).values_list('id', flat=True)
             category_ids = set(list(assigned_category_ids) + list(categories_from_scores))
             categories = Category.objects.filter(id__in=category_ids)
 
             category_stats = []
             for category in categories:
-                category_scores = scores_qs.filter(model__category=category)
+                category_feedbacks = feedbacks_qs.filter(model__category=category)
                 models_in_category = Model.objects.filter(category=category)
 
                 # Per-model (roleplay) performance
                 models_data = []
                 for model in models_in_category:
-                    model_scores = category_scores.filter(model=model).order_by('-submitted_at')
-                    if model_scores.exists():
-                        latest = model_scores.first()
-                        highest = model_scores.aggregate(Max('score'))['score__max'] or 0
+                    model_feedbacks = category_feedbacks.filter(model=model).order_by('-submitted_at')
+                    if model_feedbacks.exists():
+                        latest = model_feedbacks.first()
+                        highest = model_feedbacks.aggregate(Max('score'))['score__max'] or 0
                         models_data.append({
                             'model_id': model.id,
                             'model_name': model.name,
-                            'attempts_count': model_scores.count(),
+                            'attempts_count': model_feedbacks.count(),
                             'latest_score': latest.score,
                             'highest_score': highest,
                             'last_attempt': latest.submitted_at,
@@ -430,17 +418,17 @@ class UserPerformanceViewSet(viewsets.ViewSet):
                         })
 
                 # Category summary
-                if category_scores.exists():
+                if category_feedbacks.exists():
                     category_stats.append({
                         'category_id': category.id,
                         'category_name': category.name,
-                        'attempts_count': category_scores.count(),
-                        'average_score': category_scores.aggregate(Avg('score'))['score__avg'] or 0,
-                        'highest_score': category_scores.aggregate(Max('score'))['score__max'] or 0,
-                        'lowest_score': category_scores.aggregate(Min('score'))['score__min'] or 0,
-                        'last_attempt': category_scores.latest('submitted_at').submitted_at,
+                        'attempts_count': category_feedbacks.count(),
+                        'average_score': category_feedbacks.aggregate(Avg('score'))['score__avg'] or 0,
+                        'highest_score': category_feedbacks.aggregate(Max('score'))['score__max'] or 0,
+                        'lowest_score': category_feedbacks.aggregate(Min('score'))['score__min'] or 0,
+                        'last_attempt': category_feedbacks.latest('submitted_at').submitted_at,
                         'models_count': models_in_category.count(),
-                        'models_attempted': category_scores.values('model').distinct().count(),
+                        'models_attempted': category_feedbacks.values('model').distinct().count(),
                         'models': models_data,
                     })
                 else:
@@ -465,7 +453,7 @@ class UserPerformanceViewSet(viewsets.ViewSet):
             category_stats = with_attempts + without_attempts
 
             # Most recent roleplay the user tried
-            recent_score = scores_qs.order_by('-submitted_at').first()
+            recent_score = feedbacks_qs.filter(model__isnull=False).order_by('-submitted_at').first()
             recent_roleplay = None
             if recent_score:
                 recent_roleplay = {
@@ -513,7 +501,7 @@ class UserPerformanceViewSet(viewsets.ViewSet):
             user = GHLUser.objects.get(email=email, status='active')
             category = Category.objects.get(id=category_id)
 
-            scores = RoleplayScore.objects.filter(
+            scores = Feedback.objects.filter(
                 user=user,
                 model__category=category
             ).select_related('model').order_by('-submitted_at')
