@@ -25,3 +25,13 @@ class GHLUserSerializer(serializers.ModelSerializer):
         assignments = UserCategoryAssignment.objects.filter(user=obj)
         categories = [assignment.category for assignment in assignments]
         return CategorySerializer(categories, many=True).data
+
+class LocationWithUsersSerializer(serializers.ModelSerializer):
+    users = GHLUserSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = GHLAuthCredentials
+        fields = [
+            'location_id', 'location_name', 'company_id', 'timezone',
+            'user_id', 'scope', 'user_type', 'created_at', 'updated_at', 'users'
+        ]

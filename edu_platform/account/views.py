@@ -9,7 +9,7 @@ from .tasks import sync_ghl_users_task, manual_refresh_users_task, handle_user_w
 from .services import get_location_name
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from .serializers import GHLUserSerializer
+from .serializers import GHLUserSerializer, LocationWithUsersSerializer
 from roleplay.models import UserCategoryAssignment
 from .helpers import assign_all_categories_to_users
 
@@ -256,3 +256,10 @@ class AssignCategoriesToAllUsersView(APIView):
                 {"error": str(e)}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class ListLocationsWithUsersView(APIView):
+    """API to get all locations and their corresponding users"""
+    def get(self, request):
+        locations = GHLAuthCredentials.objects.prefetch_related('users').all()
+        serializer = LocationWithUsersSerializer(locations, many=True)
+        return Response(serializer.data)
