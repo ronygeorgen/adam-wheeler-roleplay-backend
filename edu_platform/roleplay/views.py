@@ -4,6 +4,7 @@ from rest_framework import serializers
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db.models import Avg, Count, Q, Max, Min
+from datetime import datetime, timezone
 from .models import Category, Model, UserCategoryAssignment, Feedback, RoleplayScore
 from account.models import GHLUser
 from .serializers import (
@@ -376,11 +377,15 @@ class UserPerformanceViewSet(viewsets.ViewSet):
         try:
             user = GHLUser.objects.get(email=email, status='active')
             
-            # Get all feedback and scores for this user
-            feedbacks = Feedback.objects.filter(user=user).select_related('user')
-            scores = RoleplayScore.objects.filter(user=user).select_related('model', 'model__category')
+            # Get all scores for this user with category information
+            scores = RoleplayScore.objects.filter(user=user).select_related(
+                'model', 'model__category'
+            )
             
-            # Overall statistics
+            # Get all feedbacks for this user
+            feedbacks = Feedback.objects.filter(user=user)
+            
+            # Overall statistics - calculate from ALL scores
             overall_stats = {
                 'total_feedbacks': feedbacks.count(),
                 'total_scores': scores.count(),
@@ -389,49 +394,90 @@ class UserPerformanceViewSet(viewsets.ViewSet):
                 'lowest_score': scores.aggregate(Min('score'))['score__min'] or 0,
             }
             
-            # Statistics by category
+            # Statistics by category - FIXED QUERY
             category_stats = []
-            categories = Category.objects.filter(
+            
+            # Get all categories that have models with scores for this user
+            categories_with_scores = Category.objects.filter(
                 models__scores__user=user
             ).distinct()
             
-            for category in categories:
+            for category in categories_with_scores:
+                # Get scores for models in this category
                 category_scores = scores.filter(model__category=category)
-                category_feedbacks = feedbacks.filter(
-                    user=user,
-                    score__in=category_scores.values_list('score', flat=True)
-                )
                 
                 if category_scores.exists():
+                    # Get feedbacks that match scores in this category
+                    category_score_values = category_scores.values_list('score', flat=True)
+                    category_feedbacks = feedbacks.filter(score__in=category_score_values)
+                    
                     category_stats.append({
                         'category_id': category.id,
                         'category_name': category.name,
                         'attempts_count': category_scores.count(),
                         'average_score': category_scores.aggregate(Avg('score'))['score__avg'] or 0,
                         'highest_score': category_scores.aggregate(Max('score'))['score__max'] or 0,
-                        'last_attempt': category_scores.latest('submitted_at').submitted_at if category_scores.exists() else None,
+                        'lowest_score': category_scores.aggregate(Min('score'))['score__min'] or 0,
+                        'last_attempt': category_scores.latest('submitted_at').submitted_at,
                         'feedbacks_count': category_feedbacks.count(),
+                        'models_count': Model.objects.filter(category=category).count(),
+                        'models_attempted': category_scores.values('model').distinct().count(),
                     })
+            
+            # Also include categories that are assigned to user but have no scores yet
+            user_categories = Category.objects.filter(
+                models__category__user_category_assignment__user=user
+            ).distinct()
+            
+            for category in user_categories:
+                if category.id not in [stat['category_id'] for stat in category_stats]:
+                    category_stats.append({
+                        'category_id': category.id,
+                        'category_name': category.name,
+                        'attempts_count': 0,
+                        'average_score': 0,
+                        'highest_score': 0,
+                        'lowest_score': 0,
+                        'last_attempt': None,
+                        'feedbacks_count': 0,
+                        'models_count': Model.objects.filter(category=category).count(),
+                        'models_attempted': 0,
+                    })
+            
+            # Sort categories by last attempt (most recent first), then by name
+            category_stats.sort(key=lambda x: (
+                x['last_attempt'] if x['last_attempt'] else datetime.min.replace(tzinfo=timezone.utc), 
+                x['category_name']
+            ), reverse=True)
             
             # Recent activity (last 10 activities)
             recent_activities = []
             recent_scores = scores.order_by('-submitted_at')[:10]
-            recent_feedbacks = feedbacks.order_by('-submitted_at')[:10]
             
-            # Combine and sort recent activities
             for score in recent_scores:
                 recent_activities.append({
                     'type': 'score',
                     'model_name': score.model.name,
                     'category_name': score.model.category.name,
+                    'category_id': score.model.category.id,
                     'score': score.score,
-                    'timestamp': score.submitted_at,
                     'raw_score': score.raw_score,
+                    'timestamp': score.submitted_at,
                 })
             
+            # Add feedbacks to recent activities
+            recent_feedbacks = feedbacks.order_by('-submitted_at')[:5]
             for feedback in recent_feedbacks:
+                # Find the corresponding score for this feedback
+                matching_score = scores.filter(score=feedback.score).first()
+                category_name = matching_score.model.category.name if matching_score else "General"
+                category_id = matching_score.model.category.id if matching_score else None
+                
                 recent_activities.append({
                     'type': 'feedback',
+                    'model_name': matching_score.model.name if matching_score else "Feedback",
+                    'category_name': category_name,
+                    'category_id': category_id,
                     'score': feedback.score,
                     'timestamp': feedback.submitted_at,
                     'has_feedback': bool(feedback.strengths or feedback.improvements),
@@ -450,6 +496,11 @@ class UserPerformanceViewSet(viewsets.ViewSet):
                 'overall_stats': overall_stats,
                 'category_stats': category_stats,
                 'recent_activities': recent_activities,
+                'debug_info': {
+                    'total_categories_found': len(category_stats),
+                    'categories_with_scores': categories_with_scores.count(),
+                    'user_categories_count': user_categories.count(),
+                }
             })
             
         except GHLUser.DoesNotExist:
@@ -476,46 +527,59 @@ class UserPerformanceViewSet(viewsets.ViewSet):
             user = GHLUser.objects.get(email=email, status='active')
             category = Category.objects.get(id=category_id)
             
-            # Get scores for this category
+            # Get scores for models in this category
             scores = RoleplayScore.objects.filter(
                 user=user,
                 model__category=category
             ).select_related('model').order_by('-submitted_at')
             
-            # Get feedbacks for this category
+            # Get feedbacks that match scores in this category
+            category_score_values = scores.values_list('score', flat=True)
             feedbacks = Feedback.objects.filter(
                 user=user,
-                score__in=scores.values_list('score', flat=True)
+                score__in=category_score_values
             ).order_by('-submitted_at')
             
-            # Model-wise performance
+            # Model-wise performance for ALL models in this category
             model_performance = []
-            models = Model.objects.filter(category=category)
+            models_in_category = Model.objects.filter(category=category)
             
-            for model in models:
+            for model in models_in_category:
                 model_scores = scores.filter(model=model)
-                if model_scores.exists():
-                    model_performance.append({
-                        'model_id': model.id,
-                        'model_name': model.name,
-                        'attempts_count': model_scores.count(),
-                        'latest_score': model_scores.first().score,
-                        'average_score': model_scores.aggregate(Avg('score'))['score__avg'] or 0,
-                        'highest_score': model_scores.aggregate(Max('score'))['score__max'] or 0,
-                        'last_attempt': model_scores.first().submitted_at,
-                    })
+                latest_score = model_scores.first()
+                
+                model_performance.append({
+                    'model_id': model.id,
+                    'model_name': model.name,
+                    'attempts_count': model_scores.count(),
+                    'latest_score': latest_score.score if latest_score else None,
+                    'average_score': model_scores.aggregate(Avg('score'))['score__avg'] if model_scores.exists() else 0,
+                    'highest_score': model_scores.aggregate(Max('score'))['score__max'] if model_scores.exists() else 0,
+                    'last_attempt': latest_score.submitted_at if latest_score else None,
+                    'has_attempt': model_scores.exists(),
+                })
+            
+            # Sort models: attempted first, then by name
+            model_performance.sort(key=lambda x: (not x['has_attempt'], x['model_name']))
+            
+            category_summary = {
+                'total_attempts': scores.count(),
+                'average_score': scores.aggregate(Avg('score'))['score__avg'] or 0,
+                'highest_score': scores.aggregate(Max('score'))['score__max'] or 0,
+                'lowest_score': scores.aggregate(Min('score'))['score__min'] or 0,
+                'feedbacks_count': feedbacks.count(),
+                'total_models': models_in_category.count(),
+                'models_attempted': scores.values('model').distinct().count(),
+                'completion_rate': round((scores.values('model').distinct().count() / models_in_category.count()) * 100, 1) if models_in_category.count() > 0 else 0,
+            }
             
             return Response({
                 'category': {
                     'id': category.id,
                     'name': category.name,
+                    'description': category.description,
                 },
-                'summary': {
-                    'total_attempts': scores.count(),
-                    'average_score': scores.aggregate(Avg('score'))['score__avg'] or 0,
-                    'highest_score': scores.aggregate(Max('score'))['score__max'] or 0,
-                    'feedbacks_count': feedbacks.count(),
-                },
+                'summary': category_summary,
                 'model_performance': model_performance,
                 'recent_scores': RoleplayScoreSerializer(scores[:5], many=True).data,
                 'recent_feedbacks': FeedbackSerializer(feedbacks[:5], many=True).data,
