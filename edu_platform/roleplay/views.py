@@ -381,31 +381,66 @@ class UserPerformanceViewSet(viewsets.ViewSet):
                 'lowest_score': feedbacks_qs.aggregate(Min('score'))['score__min'] or 0,
             }
 
-            # Categories: union of assigned categories and categories the user has scored in
-            assigned_category_ids = UserCategoryAssignment.objects.filter(user=user).values_list('category_id', flat=True)
-            categories_from_scores = Category.objects.filter(models__feedbacks__user=user).values_list('id', flat=True)
-            category_ids = set(list(assigned_category_ids) + list(categories_from_scores))
-            categories = Category.objects.filter(id__in=category_ids)
+            # Categories: union of assigned categories and categories the user has feedback in
+            assigned_category_ids = set(UserCategoryAssignment.objects.filter(user=user).values_list('category_id', flat=True))
+            categories_from_feedbacks = set(
+                feedbacks_qs.filter(model__isnull=False).values_list('model__category_id', flat=True).distinct()
+            )
+            category_ids = list(assigned_category_ids.union(categories_from_feedbacks))
 
+            # Fetch categories and models in bulk
+            categories = list(Category.objects.filter(id__in=category_ids))
+            models_qs = Model.objects.filter(category_id__in=category_ids).select_related('category')
+
+            # Group models by category_id
+            models_by_category = {}
+            for m in models_qs:
+                models_by_category.setdefault(m.category_id, []).append(m)
+
+            # Precompute per-model aggregates in one query
+            model_aggs = feedbacks_qs.filter(model__isnull=False).values('model').annotate(
+                attempts_count=Count('id'),
+                highest_score=Max('score'),
+                average_score=Avg('score'),
+                last_attempt=Max('submitted_at')
+            )
+            model_aggs_by_id = {row['model']: row for row in model_aggs}
+
+            # Compute latest score per model in one pass over ordered feedbacks
+            latest_by_model = {}
+            for fb in feedbacks_qs.filter(model__isnull=False).order_by('-submitted_at').values('model_id', 'score', 'submitted_at'):
+                mid = fb['model_id']
+                if mid not in latest_by_model:
+                    latest_by_model[mid] = {'latest_score': fb['score'], 'last_attempt': fb['submitted_at']}
+
+            # Precompute per-category aggregates in one query
+            category_aggs = feedbacks_qs.filter(model__isnull=False).values('model__category').annotate(
+                attempts_count=Count('id'),
+                average_score=Avg('score'),
+                highest_score=Max('score'),
+                lowest_score=Min('score'),
+                last_attempt=Max('submitted_at'),
+                models_attempted=Count('model', distinct=True)
+            )
+            category_aggs_by_id = {row['model__category']: row for row in category_aggs}
+
+            # Build response structure with minimal additional queries
             category_stats = []
             for category in categories:
-                category_feedbacks = feedbacks_qs.filter(model__category=category)
-                models_in_category = Model.objects.filter(category=category)
+                cat_models = models_by_category.get(category.id, [])
 
-                # Per-model (roleplay) performance
                 models_data = []
-                for model in models_in_category:
-                    model_feedbacks = category_feedbacks.filter(model=model).order_by('-submitted_at')
-                    if model_feedbacks.exists():
-                        latest = model_feedbacks.first()
-                        highest = model_feedbacks.aggregate(Max('score'))['score__max'] or 0
+                for model in cat_models:
+                    aggs = model_aggs_by_id.get(model.id)
+                    latest = latest_by_model.get(model.id)
+                    if aggs:
                         models_data.append({
                             'model_id': model.id,
                             'model_name': model.name,
-                            'attempts_count': model_feedbacks.count(),
-                            'latest_score': latest.score,
-                            'highest_score': highest,
-                            'last_attempt': latest.submitted_at,
+                            'attempts_count': aggs['attempts_count'],
+                            'latest_score': (latest['latest_score'] if latest else None),
+                            'highest_score': aggs['highest_score'] or 0,
+                            'last_attempt': (latest['last_attempt'] if latest else None),
                         })
                     else:
                         models_data.append({
@@ -417,18 +452,18 @@ class UserPerformanceViewSet(viewsets.ViewSet):
                             'last_attempt': None,
                         })
 
-                # Category summary
-                if category_feedbacks.exists():
+                cat_aggs = category_aggs_by_id.get(category.id)
+                if cat_aggs:
                     category_stats.append({
                         'category_id': category.id,
                         'category_name': category.name,
-                        'attempts_count': category_feedbacks.count(),
-                        'average_score': category_feedbacks.aggregate(Avg('score'))['score__avg'] or 0,
-                        'highest_score': category_feedbacks.aggregate(Max('score'))['score__max'] or 0,
-                        'lowest_score': category_feedbacks.aggregate(Min('score'))['score__min'] or 0,
-                        'last_attempt': category_feedbacks.latest('submitted_at').submitted_at,
-                        'models_count': models_in_category.count(),
-                        'models_attempted': category_feedbacks.values('model').distinct().count(),
+                        'attempts_count': cat_aggs['attempts_count'],
+                        'average_score': cat_aggs['average_score'] or 0,
+                        'highest_score': cat_aggs['highest_score'] or 0,
+                        'lowest_score': cat_aggs['lowest_score'] or 0,
+                        'last_attempt': cat_aggs['last_attempt'],
+                        'models_count': len(cat_models),
+                        'models_attempted': cat_aggs['models_attempted'],
                         'models': models_data,
                     })
                 else:
@@ -440,7 +475,7 @@ class UserPerformanceViewSet(viewsets.ViewSet):
                         'highest_score': 0,
                         'lowest_score': 0,
                         'last_attempt': None,
-                        'models_count': models_in_category.count(),
+                        'models_count': len(cat_models),
                         'models_attempted': 0,
                         'models': models_data,
                     })
