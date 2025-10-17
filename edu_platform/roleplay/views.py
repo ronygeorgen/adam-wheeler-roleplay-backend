@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework import serializers
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from django.db.models import Avg, Count, Q
+from django.db.models import Avg, Count, Q, Max, Min
 from .models import Category, Model, UserCategoryAssignment, Feedback, RoleplayScore
 from account.models import GHLUser
 from .serializers import (
@@ -357,3 +357,177 @@ class RoleplayScoreViewSet(viewsets.ModelViewSet):
             'location_id': location_id,
             'leaderboard': list(leaderboard)
         })
+    
+class UserPerformanceViewSet(viewsets.ViewSet):
+    """API for user performance dashboard"""
+    
+    @action(detail=False, methods=['get'])
+    def user_stats(self, request):
+        """
+        Get user performance statistics by email
+        """
+        email = request.query_params.get('email')
+        if not email:
+            return Response(
+                {"error": "Email parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user = GHLUser.objects.get(email=email, status='active')
+            
+            # Get all feedback and scores for this user
+            feedbacks = Feedback.objects.filter(user=user).select_related('user')
+            scores = RoleplayScore.objects.filter(user=user).select_related('model', 'model__category')
+            
+            # Overall statistics
+            overall_stats = {
+                'total_feedbacks': feedbacks.count(),
+                'total_scores': scores.count(),
+                'average_score': scores.aggregate(Avg('score'))['score__avg'] or 0,
+                'highest_score': scores.aggregate(Max('score'))['score__max'] or 0,
+                'lowest_score': scores.aggregate(Min('score'))['score__min'] or 0,
+            }
+            
+            # Statistics by category
+            category_stats = []
+            categories = Category.objects.filter(
+                models__scores__user=user
+            ).distinct()
+            
+            for category in categories:
+                category_scores = scores.filter(model__category=category)
+                category_feedbacks = feedbacks.filter(
+                    user=user,
+                    score__in=category_scores.values_list('score', flat=True)
+                )
+                
+                if category_scores.exists():
+                    category_stats.append({
+                        'category_id': category.id,
+                        'category_name': category.name,
+                        'attempts_count': category_scores.count(),
+                        'average_score': category_scores.aggregate(Avg('score'))['score__avg'] or 0,
+                        'highest_score': category_scores.aggregate(Max('score'))['score__max'] or 0,
+                        'last_attempt': category_scores.latest('submitted_at').submitted_at if category_scores.exists() else None,
+                        'feedbacks_count': category_feedbacks.count(),
+                    })
+            
+            # Recent activity (last 10 activities)
+            recent_activities = []
+            recent_scores = scores.order_by('-submitted_at')[:10]
+            recent_feedbacks = feedbacks.order_by('-submitted_at')[:10]
+            
+            # Combine and sort recent activities
+            for score in recent_scores:
+                recent_activities.append({
+                    'type': 'score',
+                    'model_name': score.model.name,
+                    'category_name': score.model.category.name,
+                    'score': score.score,
+                    'timestamp': score.submitted_at,
+                    'raw_score': score.raw_score,
+                })
+            
+            for feedback in recent_feedbacks:
+                recent_activities.append({
+                    'type': 'feedback',
+                    'score': feedback.score,
+                    'timestamp': feedback.submitted_at,
+                    'has_feedback': bool(feedback.strengths or feedback.improvements),
+                })
+            
+            # Sort by timestamp and take latest 10
+            recent_activities.sort(key=lambda x: x['timestamp'], reverse=True)
+            recent_activities = recent_activities[:10]
+            
+            return Response({
+                'user': {
+                    'name': user.name,
+                    'email': user.email,
+                    'location_id': user.location_ghl_id,
+                },
+                'overall_stats': overall_stats,
+                'category_stats': category_stats,
+                'recent_activities': recent_activities,
+            })
+            
+        except GHLUser.DoesNotExist:
+            return Response(
+                {"error": "User not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    @action(detail=False, methods=['get'])
+    def category_performance(self, request):
+        """
+        Get detailed performance for a specific category
+        """
+        email = request.query_params.get('email')
+        category_id = request.query_params.get('category_id')
+        
+        if not email or not category_id:
+            return Response(
+                {"error": "Email and category_id parameters are required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user = GHLUser.objects.get(email=email, status='active')
+            category = Category.objects.get(id=category_id)
+            
+            # Get scores for this category
+            scores = RoleplayScore.objects.filter(
+                user=user,
+                model__category=category
+            ).select_related('model').order_by('-submitted_at')
+            
+            # Get feedbacks for this category
+            feedbacks = Feedback.objects.filter(
+                user=user,
+                score__in=scores.values_list('score', flat=True)
+            ).order_by('-submitted_at')
+            
+            # Model-wise performance
+            model_performance = []
+            models = Model.objects.filter(category=category)
+            
+            for model in models:
+                model_scores = scores.filter(model=model)
+                if model_scores.exists():
+                    model_performance.append({
+                        'model_id': model.id,
+                        'model_name': model.name,
+                        'attempts_count': model_scores.count(),
+                        'latest_score': model_scores.first().score,
+                        'average_score': model_scores.aggregate(Avg('score'))['score__avg'] or 0,
+                        'highest_score': model_scores.aggregate(Max('score'))['score__max'] or 0,
+                        'last_attempt': model_scores.first().submitted_at,
+                    })
+            
+            return Response({
+                'category': {
+                    'id': category.id,
+                    'name': category.name,
+                },
+                'summary': {
+                    'total_attempts': scores.count(),
+                    'average_score': scores.aggregate(Avg('score'))['score__avg'] or 0,
+                    'highest_score': scores.aggregate(Max('score'))['score__max'] or 0,
+                    'feedbacks_count': feedbacks.count(),
+                },
+                'model_performance': model_performance,
+                'recent_scores': RoleplayScoreSerializer(scores[:5], many=True).data,
+                'recent_feedbacks': FeedbackSerializer(feedbacks[:5], many=True).data,
+            })
+            
+        except GHLUser.DoesNotExist:
+            return Response(
+                {"error": "User not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Category.DoesNotExist:
+            return Response(
+                {"error": "Category not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
