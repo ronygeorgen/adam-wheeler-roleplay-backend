@@ -176,29 +176,25 @@ REST_FRAMEWORK = {
 }
 
 # Celery Configuration
-# CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
-# CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
-# CELERY_ACCEPT_CONTENT = ['json']
-# CELERY_TASK_SERIALIZER = 'json'
-# CELERY_RESULT_SERIALIZER = 'json'
-# CELERY_TIMEZONE = TIME_ZONE
-# CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
+
+# Serialization and Timezone
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+# Beat Scheduler
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
 # Celery Beat Schedule for GHL Tasks
-# CELERY_BEAT_SCHEDULE = {
-#     'refresh-ghl-tokens': {
-#         'task': 'account.tasks.make_api_for_ghl',
-#         'schedule': crontab(hour='*/6'),  # Every 6 hours
-#     },
-#     'sync-all-locations-data': {
-#         'task': 'account.tasks.sync_all_locations_data',
-#         'schedule': crontab(hour=3, minute=0),  # Daily at 3 AM
-#     },
-#     'cleanup-old-webhooks': {
-#         'task': 'account.tasks.cleanup_old_webhooks',
-#         'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
-#     },
-# }
+CELERY_BEAT_SCHEDULE = {
+    'refresh-ghl-tokens': {
+        'task': 'account.tasks.make_api_for_ghl',
+        'schedule': crontab(hour='*/6'),  # Every 6 hours
+    },
+}
 
 # GHL Configuration
 GHL_CLIENT_ID = config("GHL_CLIENT_ID")

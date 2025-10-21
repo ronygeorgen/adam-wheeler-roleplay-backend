@@ -4,6 +4,7 @@ from account.models import GHLUser
 class Category(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
+    is_default = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -14,6 +15,8 @@ class Model(models.Model):
     category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name='models')
     name = models.CharField(max_length=255)
     iframe_code = models.TextField()
+    min_score_to_pass = models.IntegerField(default=70) 
+    min_attempts_required = models.IntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

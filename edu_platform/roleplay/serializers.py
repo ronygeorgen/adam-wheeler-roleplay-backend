@@ -5,7 +5,7 @@ from account.models import GHLUser
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
-        fields = ['id', 'name', 'description', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'description', 'is_default', 'created_at', 'updated_at']
 
 class ModelSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)

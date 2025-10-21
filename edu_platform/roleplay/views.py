@@ -78,6 +78,27 @@ class GHLUserViewSet(viewsets.ViewSet):
         user = get_object_or_404(GHLUser, user_id=pk)
         user.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=False, methods=['post'])
+    def assign_default_categories(self, request):
+        """
+        Assign default categories to all active users
+        """
+        default_categories = Category.objects.filter(is_default=True)
+        active_users = GHLUser.objects.filter(status='active')
+        
+        assignments_created = 0
+        for user in active_users:
+            for category in default_categories:
+                # Check if assignment already exists
+                if not UserCategoryAssignment.objects.filter(user=user, category=category).exists():
+                    UserCategoryAssignment.objects.create(user=user, category=category)
+                    assignments_created += 1
+        
+        return Response({
+            "message": f"Assigned {len(default_categories)} default categories to {active_users.count()} users",
+            "assignments_created": assignments_created
+        })
 
 class UserAccessViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
@@ -329,7 +350,9 @@ class UserPerformanceViewSet(viewsets.ViewSet):
                         'latest_score': (latest['latest_score'] if latest else None),
                         'highest_score': aggs['highest_score'] if aggs else 0,
                         'last_attempt': (latest['last_attempt'] if latest else None),
-                        'models_attempt_history': attempt_history
+                        'models_attempt_history': attempt_history,
+                        'min_score_to_pass': model.min_score_to_pass,
+                        'min_attempts_required': model.min_attempts_required
                     }
                     models_data.append(model_data)
 
