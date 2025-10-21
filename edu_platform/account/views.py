@@ -200,14 +200,19 @@ class GHLWebhookView(APIView):
             event_type = data.get("type")
             
             # FIX: Use direct function call instead of Celery task
-            if event_type in ["UserCreated", "UserUpdated", "UserDeleted"]:
-                from .helpers import handle_user_webhook
-                handle_user_webhook(data, event_type)
+            if event_type in ["UserCreated", "UserUpdated", "UserDeleted", "UserCreate", "UserUpdate", "UserDelete"]:
+                from .tasks import handle_user_webhook_event
+                handle_user_webhook_event.delay(data, event_type)
+                print(f"✅ Webhook {event_type} queued for processing")
+            else:
+                print(f"⚠️ Unhandled webhook type: {event_type}")
             
             return Response({"message": "Webhook received"}, status=status.HTTP_200_OK)
             
         except Exception as e:
-            print(f"Webhook handler error: {e}")
+            print(f"❌ Webhook handler error: {e}")
+            import traceback
+            traceback.print_exc()
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
 

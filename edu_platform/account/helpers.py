@@ -120,39 +120,52 @@ def handle_user_webhook(data, event_type):
     """
     try:
         location_id = data.get("locationId")
-        user_data = data.get("user", {})
+        # The user data is directly in the root, not nested under 'user'
+        user_id = data.get("id")
+        first_name = data.get("firstName")
+        last_name = data.get("lastName")
+        email = data.get("email")
         
-        if not location_id or not user_data:
-            print(f"Invalid webhook data: location_id={location_id}, user_data={user_data}")
-            return
+        print(f"🔄 Processing webhook: {event_type} for user: {email}")
         
-        user_id = user_data.get("id")
-        if not user_id:
-            print("No user ID found in webhook data")
+        if not location_id or not user_id:
+            print(f"❌ Invalid webhook data: location_id={location_id}, user_id={user_id}")
             return
 
-        if event_type == "UserCreated":
+        # Map GHL event types to your expected types
+        event_type_map = {
+            "UserCreate": "UserCreated",
+            "UserUpdate": "UserUpdated", 
+            "UserDelete": "UserDeleted"
+        }
+        
+        mapped_event_type = event_type_map.get(event_type, event_type)
+        print(f"📋 Event type mapped: {event_type} -> {mapped_event_type}")
+
+        if mapped_event_type == "UserCreated":
             try:
                 location = GHLAuthCredentials.objects.get(location_id=location_id)
             except GHLAuthCredentials.DoesNotExist:
-                print(f"Location not found: {location_id}")
+                print(f"❌ Location not found: {location_id}")
                 return
 
-            # Create or update user
+            # Create or update user - data is at root level, not nested
             user, created = GHLUser.objects.update_or_create(
                 user_id=user_id,
                 defaults={
                     'location': location,
-                    'location_ghl_id': location_id,  # ADD THIS LINE
-                    'name': f"{user_data.get('firstName', '')} {user_data.get('lastName', '')}".strip(),
-                    'first_name': user_data.get('firstName', ''),
-                    'last_name': user_data.get('lastName', ''),
-                    'email': user_data.get('email', ''),
-                    'phone': user_data.get('phone', ''),
-                    'role': user_data.get('role', ''),
-                    'status': user_data.get('status', 'active')
+                    'location_ghl_id': location_id,
+                    'name': f"{first_name or ''} {last_name or ''}".strip(),
+                    'first_name': first_name or '',
+                    'last_name': last_name or '',
+                    'email': email or '',
+                    'phone': data.get('phone', ''),
+                    'role': data.get('role', ''),
+                    'status': 'active'  # GHL doesn't send status in these webhooks
                 }
             )
+            
+            print(f"👤 User {'created' if created else 'updated'}: {user.email}")
             
             # If this is a new user, assign all categories to them
             if created:
@@ -167,11 +180,11 @@ def handle_user_webhook(data, event_type):
                         if assignment_created:
                             assignments_created += 1
                     
-                    print(f"Auto-assigned {assignments_created} categories to new user: {user.email}")
+                    print(f"✅ Auto-assigned {assignments_created} categories to new user: {user.email}")
                 else:
-                    print(f"No categories available to assign to new user: {user.email}")
+                    print(f"⚠️ No categories available to assign to new user: {user.email}")
                 
-        elif event_type == "UserUpdated":
+        elif mapped_event_type == "UserUpdated":
             try:
                 location = GHLAuthCredentials.objects.get(location_id=location_id)
                 
@@ -180,15 +193,17 @@ def handle_user_webhook(data, event_type):
                     user_id=user_id,
                     defaults={
                         'location': location,
-                        'name': f"{user_data.get('firstName', '')} {user_data.get('lastName', '')}".strip(),
-                        'first_name': user_data.get('firstName', ''),
-                        'last_name': user_data.get('lastName', ''),
-                        'email': user_data.get('email', ''),
-                        'phone': user_data.get('phone', ''),
-                        'role': user_data.get('role', ''),
-                        'status': user_data.get('status', 'active')
+                        'name': f"{first_name or ''} {last_name or ''}".strip(),
+                        'first_name': first_name or '',
+                        'last_name': last_name or '',
+                        'email': email or '',
+                        'phone': data.get('phone', ''),
+                        'role': data.get('role', ''),
+                        'status': 'active'
                     }
                 )
+                
+                print(f"👤 User {'created' if created else 'updated'}: {user.email}")
                 
                 # If this was actually a creation (not just update), assign categories
                 if created:
@@ -203,14 +218,12 @@ def handle_user_webhook(data, event_type):
                             if assignment_created:
                                 assignments_created += 1
                         
-                        print(f"Auto-assigned {assignments_created} categories to new user (from update): {user.email}")
-                
-                print(f"Updated user: {user.email}")
+                        print(f"✅ Auto-assigned {assignments_created} categories to new user (from update): {user.email}")
                 
             except GHLAuthCredentials.DoesNotExist:
-                print(f"Location not found for user update: {location_id}")
+                print(f"❌ Location not found for user update: {location_id}")
             
-        elif event_type == "UserDeleted":
+        elif mapped_event_type == "UserDeleted":
             # Delete user and their category assignments
             try:
                 user = GHLUser.objects.get(user_id=user_id)
@@ -218,11 +231,13 @@ def handle_user_webhook(data, event_type):
                 UserCategoryAssignment.objects.filter(user=user).delete()
                 # Then delete the user
                 user.delete()
-                print(f"Deleted user and their category assignments: {user_id}")
+                print(f"🗑️ Deleted user and their category assignments: {user_id}")
             except GHLUser.DoesNotExist:
-                print(f"User not found for deletion: {user_id}")
+                print(f"⚠️ User not found for deletion: {user_id}")
+            
+        print(f"✅ Webhook {mapped_event_type} processed successfully for user: {email}")
             
     except Exception as e:
-        print(f"Error handling user webhook: {e}")
+        print(f"❌ Error handling user webhook: {e}")
         import traceback
-        traceback.print_exc()  # This will give you the full stack trace
+        traceback.print_exc()
