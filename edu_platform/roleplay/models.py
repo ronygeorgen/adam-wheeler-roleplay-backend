@@ -10,6 +10,34 @@ class Category(models.Model):
 
     def __str__(self):
         return self.name
+    
+    def save(self, *args, **kwargs):
+        # Check if is_default is being changed to True
+        is_new_default = False
+        if self.pk:  # Existing instance
+            old_instance = Category.objects.get(pk=self.pk)
+            if not old_instance.is_default and self.is_default:
+                is_new_default = True
+        else:  # New instance
+            if self.is_default:
+                is_new_default = True
+        
+        # Save the category first
+        super().save(*args, **kwargs)
+        
+        # If this category is now default, assign it to all active users
+        if is_new_default:
+            self.assign_to_all_active_users()
+
+    def assign_to_all_active_users(self):
+        """Assign this category to all active users"""
+        active_users = GHLUser.objects.filter(status='active')
+        
+        for user in active_users:
+            UserCategoryAssignment.objects.get_or_create(
+                user=user,
+                category=self
+            )
 
 class Model(models.Model):
     category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name='models')
