@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Category, Model, UserCategoryAssignment, Feedback, RoleplayScore
+from .models import Category, Model, UserCategoryAssignment, Feedback
 from account.models import GHLUser
 
 class CategorySerializer(serializers.ModelSerializer):

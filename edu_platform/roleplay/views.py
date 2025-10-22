@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db.models import Avg, Count, Q, Max, Min
 from datetime import datetime, timezone
-from .models import Category, Model, UserCategoryAssignment, Feedback, RoleplayScore
+from .models import Category, Model, UserCategoryAssignment, Feedback
 from account.models import GHLUser
 from .serializers import (
     CategorySerializer, ModelSerializer, 
@@ -420,3 +420,206 @@ class UserPerformanceViewSet(viewsets.ViewSet):
                 {"error": "User not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+
+
+class AdminReportsViewSet(viewsets.ViewSet):
+    """API for admin dashboard showing reports for all users"""
+    
+    @action(detail=False, methods=['get'])
+    def all_users_performance(self, request):
+        """
+        Get performance data for all users in a location or all locations
+        """
+        location_id = request.query_params.get('location_id')
+        
+        # Build base queryset
+        users_qs = GHLUser.objects.filter(status='active')
+        if location_id:
+            users_qs = users_qs.filter(location_ghl_id=location_id)
+        
+        users_data = []
+        
+        for user in users_qs.select_related('location'):
+            # Get user's feedback data
+            feedbacks_qs = Feedback.objects.filter(user=user).select_related('model', 'model__category')
+            
+            # Overall stats
+            overall_stats = {
+                'total_feedbacks': feedbacks_qs.count(),
+                'total_scores': feedbacks_qs.count(),
+                'average_score': feedbacks_qs.aggregate(Avg('score'))['score__avg'] or 0,
+                'highest_score': feedbacks_qs.aggregate(Max('score'))['score__max'] or 0,
+                'lowest_score': feedbacks_qs.aggregate(Min('score'))['score__min'] or 0,
+            }
+            
+            # Category stats
+            assigned_category_ids = set(
+                UserCategoryAssignment.objects.filter(user=user).values_list('category_id', flat=True)
+            )
+            categories_from_feedbacks = set(
+                feedbacks_qs.filter(model__isnull=False)
+                .values_list('model__category_id', flat=True)
+                .distinct()
+            )
+            category_ids = list(assigned_category_ids.union(categories_from_feedbacks))
+            
+            categories = Category.objects.filter(id__in=category_ids)
+            category_stats = []
+            
+            for category in categories:
+                category_feedbacks = feedbacks_qs.filter(model__category=category)
+                category_aggs = category_feedbacks.aggregate(
+                    attempts_count=Count('id'),
+                    average_score=Avg('score'),
+                    highest_score=Max('score'),
+                    lowest_score=Min('score'),
+                    last_attempt=Max('submitted_at'),
+                    models_attempted=Count('model', distinct=True)
+                )
+                
+                # Get models for this category
+                models_in_category = Model.objects.filter(category=category)
+                models_data = []
+                
+                for model in models_in_category:
+                    model_feedbacks = feedbacks_qs.filter(model=model).order_by('-submitted_at')
+                    model_aggs = model_feedbacks.aggregate(
+                        attempts_count=Count('id'),
+                        highest_score=Max('score'),
+                        average_score=Avg('score'),
+                        last_attempt=Max('submitted_at')
+                    )
+                    
+                    # Get latest score
+                    latest_feedback = model_feedbacks.first()
+                    latest_score = latest_feedback.score if latest_feedback else None
+                    
+                    # Get attempt history for this model
+                    attempt_history = []
+                    for feedback in model_feedbacks:
+                        attempt_history.append({
+                            'model_id': feedback.model.id,
+                            'model_name': feedback.model.name,
+                            'score': feedback.score,
+                            'strengths': feedback.strengths,
+                            'improvements': feedback.improvements,
+                            'submitted_at': feedback.submitted_at
+                        })
+                    
+                    models_data.append({
+                        'model_id': model.id,
+                        'model_name': model.name,
+                        'attempts_count': model_aggs['attempts_count'] or 0,
+                        'latest_score': latest_score,
+                        'highest_score': model_aggs['highest_score'] or 0,
+                        'average_score': model_aggs['average_score'] or 0,
+                        'last_attempt': model_aggs['last_attempt'],
+                        'min_score_to_pass': model.min_score_to_pass,
+                        'min_attempts_required': model.min_attempts_required,
+                        'models_attempt_history': attempt_history
+                    })
+                
+                category_stats.append({
+                    'category_id': category.id,
+                    'category_name': category.name,
+                    'attempts_count': category_aggs['attempts_count'] or 0,
+                    'average_score': category_aggs['average_score'] or 0,
+                    'highest_score': category_aggs['highest_score'] or 0,
+                    'lowest_score': category_aggs['lowest_score'] or 0,
+                    'last_attempt': category_aggs['last_attempt'],
+                    'models_attempted': category_aggs['models_attempted'] or 0,
+                    'models': models_data
+                })
+            
+            # Most recent roleplay
+            recent_feedback = feedbacks_qs.filter(model__isnull=False).order_by('-submitted_at').first()
+            recent_roleplay = None
+            if recent_feedback:
+                recent_roleplay = {
+                    'model_id': recent_feedback.model.id,
+                    'model_name': recent_feedback.model.name,
+                    'category_id': recent_feedback.model.category.id,
+                    'category_name': recent_feedback.model.category.name,
+                    'score': recent_feedback.score,
+                    'timestamp': recent_feedback.submitted_at,
+                }
+            
+            # Calculate completion status
+            assigned_categories_count = UserCategoryAssignment.objects.filter(user=user).count()
+            completed_categories_count = len([
+                cat for cat in category_stats 
+                if cat['attempts_count'] > 0
+            ])
+            
+            users_data.append({
+                'user': {
+                    'user_id': user.user_id,
+                    'name': user.name,
+                    'email': user.email,
+                    'location_id': user.location_ghl_id,
+                    'location_name': user.location.location_name if user.location else 'Unknown',
+                },
+                'overall_stats': overall_stats,
+                'category_stats': category_stats,
+                'recent_roleplay': recent_roleplay,
+                'completion_status': {
+                    'assigned_categories': assigned_categories_count,
+                    'completed_categories': completed_categories_count,
+                    'completion_rate': round(
+                        (completed_categories_count / assigned_categories_count * 100) 
+                        if assigned_categories_count > 0 else 0, 
+                        2
+                    )
+                }
+            })
+        
+        # Sort users by completion rate (highest first) then by name
+        users_data.sort(key=lambda x: (
+            -x['completion_status']['completion_rate'],
+            x['user']['name'].lower()
+        ))
+        
+        # Calculate location-wide stats
+        location_stats = {
+            'total_users': len(users_data),
+            'total_feedbacks': sum(user['overall_stats']['total_feedbacks'] for user in users_data),
+            'average_score_all_users': round(
+                sum(user['overall_stats']['average_score'] for user in users_data) / len(users_data) 
+                if users_data else 0, 
+                2
+            ),
+            'average_completion_rate': round(
+                sum(user['completion_status']['completion_rate'] for user in users_data) / len(users_data) 
+                if users_data else 0, 
+                2
+            ),
+        }
+        
+        return Response({
+            'location_stats': location_stats,
+            'users': users_data,
+        })
+    
+    @action(detail=False, methods=['get'])
+    def location_summary(self, request):
+        """
+        Get summary statistics for locations
+        """
+        location_id = request.query_params.get('location_id')
+        
+        locations_qs = GHLUser.objects.filter(status='active')
+        if location_id:
+            locations_qs = locations_qs.filter(location_ghl_id=location_id)
+        
+        # Group by location
+        from django.db.models import Count, Avg
+        location_stats = locations_qs.values(
+            'location_ghl_id', 'location__location_name'
+        ).annotate(
+            user_count=Count('user_id'),
+            total_feedbacks=Count('feedbacks'),
+            avg_score=Avg('feedbacks__score')
+        ).order_by('-user_count')
+        
+        return Response(list(location_stats))
