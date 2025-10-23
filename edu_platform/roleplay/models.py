@@ -1,6 +1,7 @@
 from django.db import models
 from account.models import GHLUser
 
+
 class Category(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
@@ -55,12 +56,23 @@ class UserCategoryAssignment(models.Model):
     user = models.ForeignKey(GHLUser, on_delete=models.CASCADE, related_name='assigned_categories')
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
     assigned_at = models.DateTimeField(auto_now_add=True)
+    notified_ghl = models.BooleanField(default=False)
 
     class Meta:
         unique_together = ['user', 'category']
 
     def __str__(self):
         return f"{self.user.name} - {self.category.name}"
+    
+    def save(self, *args, **kwargs):
+        # Check if this is a new assignment
+        is_new = self._state.adding
+        super().save(*args, **kwargs)
+        
+        # Trigger signal for new assignments
+        if is_new:
+            from .signals import handle_category_assignment
+            handle_category_assignment(sender=UserCategoryAssignment, instance=self, created=True)
     
 
 class Feedback(models.Model):

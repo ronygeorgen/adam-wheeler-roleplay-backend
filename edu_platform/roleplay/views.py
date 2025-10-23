@@ -16,6 +16,63 @@ class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
 
+    def create(self, request, *args, **kwargs):
+        """
+        Override create to handle user assignment when user_id is provided
+        """
+        user_id = request.data.get('user_id')
+        
+        # Create the category first
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        category = serializer.save()
+        
+        # If user_id was provided, assign the category to that user
+        if user_id:
+            try:
+                user = GHLUser.objects.get(user_id=user_id)
+                assignment, created = UserCategoryAssignment.objects.get_or_create(
+                    user=user,
+                    category=category
+                )
+                if created:
+                    print(f"✅ Assigned category {category.name} to user: {user.email}")
+                    # This will trigger the signal which calls Celery task
+            except GHLUser.DoesNotExist:
+                # You can choose to return an error or just log it
+                print(f"⚠️ User with ID {user_id} not found")
+        
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        """
+        Override update to handle user assignment when user_id is provided
+        """
+        user_id = request.data.get('user_id')
+        
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        category = serializer.save()
+        
+        # If user_id was provided, assign the category to that user
+        if user_id:
+            try:
+                user = GHLUser.objects.get(user_id=user_id)
+                assignment, created = UserCategoryAssignment.objects.get_or_create(
+                    user=user,
+                    category=category
+                )
+                if created:
+                    print(f"✅ Assigned category {category.name} to user: {user.email}")
+                    # This will trigger the signal which calls Celery task
+            except GHLUser.DoesNotExist:
+                print(f"⚠️ User with ID {user_id} not found")
+        
+        return Response(serializer.data)
+
 class ModelViewSet(viewsets.ModelViewSet):
     queryset = Model.objects.all()
     serializer_class = ModelSerializer
@@ -60,10 +117,18 @@ class GHLUserViewSet(viewsets.ViewSet):
         UserCategoryAssignment.objects.filter(user=user).delete()
         
         # Create new assignments
+        assigned_categories = []
+
         for category_id in category_ids:
             try:
                 category = Category.objects.get(id=category_id)
-                UserCategoryAssignment.objects.create(user=user, category=category)
+                assignment, created = UserCategoryAssignment.objects.get_or_create(
+                    user=user, 
+                    category=category
+                )
+                if created:
+                    assigned_categories.append(category.name)
+                    print(f"✅ Manually assigned category {category.name} to user: {user.email}")
             except Category.DoesNotExist:
                 return Response(
                     {"error": f"Category with id {category_id} does not exist"},
@@ -72,7 +137,12 @@ class GHLUserViewSet(viewsets.ViewSet):
         
         # Return updated user data
         serializer = GHLUserSerializer(user)
-        return Response(serializer.data)
+        
+        response_data = serializer.data
+        response_data['assigned_categories_list'] = assigned_categories
+        response_data['message'] = f"Assigned {len(assigned_categories)} categories to {user.email}"
+        
+        return Response(response_data)
     
     def destroy(self, request, pk=None):
         user = get_object_or_404(GHLUser, user_id=pk)
